@@ -16,6 +16,7 @@ it exits the menu comes back. This is a native program, not a web application.
 - [Running](#running)
 - [Controls](#controls)
 - [Configuration](#configuration)
+- [Music, sounds and artwork](#music-sounds-and-artwork)
 - [Adding games](#adding-games)
 - [Statistics](#statistics)
 - [Kiosk operation](#kiosk-operation)
@@ -34,8 +35,10 @@ launcher fully shuts down SDL before any game starts.
 All SDL objects belong to a single function, `run_session`. When it returns,
 they have all been dropped, `SDL_Quit` has run, the DRM file descriptor has been
 closed, and the display is free. Nothing else in the program holds a graphics
-resource. As a safety check, the launcher then inspects `/proc/self/fd` and logs
-a warning if any `/dev/dri` or `/dev/input` device is still open.
+resource. The sound device is released the same way, which matters on plain ALSA,
+where only one program can use it at a time. As a safety check, the launcher then
+inspects `/proc/self/fd` and logs a warning if any `/dev/dri`, `/dev/input` or
+`/dev/snd` device is still open.
 
 | Module | Responsibility | Needs SDL |
 | --- | --- | --- |
@@ -46,12 +49,14 @@ a warning if any `/dev/dri` or `/dev/input` device is still open.
 | `menu.rs` | Selection, sorting, scrolling and grid geometry | No |
 | `launcher.rs` | Building and starting the game process | No |
 | `gamepad.rs` | Controllers, dead zones and key repeat | Thin layer |
+| `audio.rs` | Music and sound effects | Yes |
 | `graphics.rs` | The SDL session, event loop and drawing | Yes |
 
 ### The two launch modes
 
 Both start the same way: the game is **validated**, its statistics are
-**committed**, and **SDL is shut down**. They differ in what happens next.
+**committed**, the **launch sound** plays, and **SDL is shut down**. They differ
+in what happens next.
 
 | | Mode A: `keepLauncherRunning = true` | Mode B: `keepLauncherRunning = false` |
 | --- | --- | --- |
@@ -72,7 +77,7 @@ the launcher in memory while the game runs, which suits small machines.
 
 - Linux with a DRM/KMS graphics driver, on a local virtual terminal
 - Rust stable, 1.85 or newer
-- SDL2 with `kmsdrm` support, plus SDL2_image and SDL2_ttf
+- SDL2 with `kmsdrm` support, plus SDL2_image, SDL2_ttf and SDL2_mixer
 - A working EGL/GBM stack (Mesa on most systems)
 - A C compiler, used once at build time to compile the bundled SQLite
 
@@ -86,7 +91,7 @@ SDL2 API on top of SDL3, and it is what `sdl2` dependencies resolve to.
 To build and run on the same machine:
 
 ```sh
-sudo pacman -S --needed base-devel rust sdl2-compat sdl2_image sdl2_ttf libdrm mesa libglvnd
+sudo pacman -S --needed base-devel rust sdl2-compat sdl2_image sdl2_ttf sdl2_mixer libdrm mesa libglvnd
 ```
 
 ### Build-time and runtime dependencies
@@ -98,6 +103,7 @@ sudo pacman -S --needed base-devel rust sdl2-compat sdl2_image sdl2_ttf libdrm m
 | `sdl2-compat` (pulls in `sdl3`) | Yes | Yes | Graphics and controllers |
 | `sdl2_image` | Yes | Yes | PNG artwork |
 | `sdl2_ttf` | Yes | Yes | Text |
+| `sdl2_mixer` | Yes | Yes | Music and sound effects. Pulls in `opusfile`, `libvorbis`, `mpg123` and `flac`, so every format below works with no extra packages |
 | `libdrm`, `mesa`, `libglvnd` | | Yes | DRM/KMS, GBM and EGL/GLES |
 
 The last row deserves attention. SDL3 opens `libdrm.so.2`, `libgbm.so.1`,
@@ -135,7 +141,8 @@ List the shared libraries the binary links against:
 ldd target/release/kioskgamemenu
 ```
 
-Expect `libSDL2-2.0.so.0`, `libSDL2_image-2.0.so.0` and `libSDL2_ttf-2.0.so.0`.
+Expect `libSDL2-2.0.so.0`, `libSDL2_image-2.0.so.0`, `libSDL2_ttf-2.0.so.0` and
+`libSDL2_mixer-2.0.so.0`.
 Anything shown as `not found` must be installed. There should be no
 `libsqlite3`, because SQLite is built in. As explained above, the DRM and GBM
 libraries will not appear. To check those separately:
@@ -194,6 +201,10 @@ logged in on the local seat, or through the `video` group:
 ```sh
 sudo usermod -aG video kiosk
 ```
+
+**Sound device.** ALSA devices are `/dev/snd/*`. A locally logged-in user normally
+receives access automatically, but only while their session is on the active
+virtual terminal. Otherwise add the user to the `audio` group.
 
 **Input devices.** Controllers appear as `/dev/input/event*`. A locally logged-in
 user normally receives access automatically. Otherwise add the `input` group:
@@ -257,6 +268,19 @@ platforms_directory = "platforms"
 
 [menu]
 sort = "name_asc"
+
+[audio]
+enabled = true
+music = "assets/music.opus"
+select_sound = "assets/select.opus"
+launch_sound = "assets/launch.opus"
+music_volume = 50
+effects_volume = 75
+
+[appearance]
+background = "assets/background.jpg"
+banner = "assets/banner.png"
+background_dim = 40
 ```
 
 | Setting | Default | Meaning |
@@ -269,6 +293,92 @@ sort = "name_asc"
 | `games.directory` | `"games"` | Directory containing one subdirectory per game. |
 | `games.platforms_directory` | `"platforms"` | Directory containing `<platform>.png` icons. |
 | `menu.sort` | `"name_asc"` | Initial order: `name_asc`, `name_desc`, `most_played` or `recently_played`. |
+| `audio.enabled` | `true` | `false` leaves the sound device completely alone. |
+| `audio.music` | `"assets/music.opus"` | Background music. |
+| `audio.select_sound` | `"assets/select.opus"` | Played when the selection moves. |
+| `audio.launch_sound` | `"assets/launch.opus"` | Played when a game starts. |
+| `audio.music_volume` | `50` | From 0 to 100. |
+| `audio.effects_volume` | `75` | From 0 to 100, for both effects. |
+| `appearance.background` | `"assets/background.jpg"` | Wallpaper. |
+| `appearance.banner` | `"assets/banner.png"` | Title banner. |
+| `appearance.background_dim` | `40` | Darkens the wallpaper, from 0 (none) to 100 (black). |
+
+A percentage outside 0 to 100 is corrected to the nearest valid value with a
+warning, rather than stopping the kiosk.
+
+## Music, sounds and artwork
+
+All of this is optional and read from disk at startup, so files can be replaced
+without recompiling. Replace a file, or point `config.toml` at a new one, and
+restart the launcher. In Mode A the audio files are also reloaded every time the
+menu returns from a game. The project ships no music, sound or wallpaper files.
+
+Leaving a file out only removes that one item. So does an unreadable file, or
+an empty path such as `music = ""`, and an invalid file also logs a warning. If no
+sound file exists at all, the sound device is never opened.
+
+### Audio formats
+
+All of these were tested on Arch Linux with `sdl2_mixer` 2.8.2, for both music and
+effects, with no additional packages:
+
+| Format | Extension | Notes |
+| --- | --- | --- |
+| Opus | `.opus` | **Recommended for music.** Small, and needs no resampling at the launcher's 48 kHz output. |
+| Ogg Vorbis | `.ogg` | Good for music too. |
+| MP3 | `.mp3` | Works through mpg123. |
+| FLAC | `.flac` | Lossless, but large for music. |
+| WAV | `.wav` | **A good choice for effects**: no decoding. |
+
+Other SDL2_mixer builds may differ. The log reports what was used, for example
+`audio ready, decoders loaded: CMD WAVE OPUS`, and a format that cannot be decoded
+produces a `cannot load` warning naming the file. Note that the list only shows
+decoders in use by the configured files, not everything available.
+
+To convert a file with ffmpeg:
+
+```sh
+ffmpeg -i theme.flac -c:a libopus -b:a 96k assets/music.opus
+```
+
+### How audio behaves
+
+- **Music** starts when the menu appears and loops. Navigating never restarts it.
+- **The selection sound** plays only if the selected game really changed, so
+  pushing against the edge of the list is silent. It has one channel of its own and
+  each play restarts it, so fast scrolling cannot pile up. It never interrupts the
+  music.
+- **Launching** fades the music over 0.3 seconds while the launch sound plays. The
+  launcher waits for that sound to finish, for at most 2 seconds, then closes the
+  sound device. Keep it under 2 seconds, or it is cut off. Without a launch sound
+  the music stops at once and there is no delay.
+- **If a game fails validation** there is no launch sound and the music continues.
+- **Mode A:** the game runs with no audio held by the launcher. When it exits, audio
+  reopens and the music starts again from the beginning.
+- **Mode B:** audio is fully closed before `exec`. The restarted launcher starts the
+  music from the beginning.
+
+If the sound device cannot be opened, the launcher logs a warning and runs silently.
+
+### Wallpaper and banner
+
+PNG and JPEG are both supported, through SDL2_image. Each image is loaded once per
+menu session, and again only if the graphics driver loses its textures.
+
+**The wallpaper** covers the whole screen. Its aspect ratio is preserved and any
+excess is cropped equally from both sides, so it is never stretched. Use 1920x1080
+or larger, at the display's aspect ratio. Keep important detail near the centre if
+it may be shown on other screens. Images are limited to 3840 pixels on the long
+side, and larger ones are scaled down.
+
+When a wallpaper is showing, the header, the footer and each game's title get a dark
+backing strip so that text stays readable. Raise `background_dim` for busy images.
+
+**The banner** sits at the top left of the screen, scaled to fit while preserving
+its aspect ratio, and transparency is honoured. Use a wide PNG with a transparent
+background, around 4:1, such as 1200x300. The header grows to make room, which
+leaves slightly less space for covers, and the selected game's title moves to the
+right. It never overlaps the covers. Without a banner the normal header is used.
 
 ## Adding games
 
@@ -595,6 +705,32 @@ supervisor, and with `kioskgamemenu --check`.
   `card0-HDMI-A-1`, and `cat /sys/class/drm/card0-*/status` should show one
   `connected`.
 
+### The menu runs but the console stays on screen
+
+If the log shows `display ready` and the music plays, but the screen does not change,
+the display is rejecting the framebuffer. The log says
+`the display rejected the first frame: Could not set videomode on CRTC`.
+
+SDL 3.4 always asks for an ARGB framebuffer, and some display planes do not accept
+one. `virtio-gpu`, as used by QEMU and libvirt virtual machines, accepts only XRGB.
+To check what a plane accepts:
+
+```sh
+modetest -M virtio_gpu -p | grep formats
+```
+
+The launcher cannot change this through SDL. It needs a small `LD_PRELOAD` shim that
+rewrites the format, and it must apply to the whole launcher. If your system has
+such a wrapper, for example one named `sdl-kms-run`, start the launcher through it:
+
+```sh
+sdl-kms-run ./kioskgamemenu --config config.toml
+sdl-kms-run scripts/kiosk-loop.sh
+```
+
+Emulators inherit the shim, which is harmless to those tested. No shim is included
+in this project.
+
 ### Failed DRM/KMS initialization
 
 `kmsdrm not available` (exit status 3) has several possible causes:
@@ -622,6 +758,24 @@ The menu shows `No controller connected` when none is usable.
   device. Supply a mapping through `SDL_GAMECONTROLLERCONFIG` or
   `SDL_GAMECONTROLLERCONFIG_FILE`, for example a file from the community
   `gamecontrollerdb.txt` project.
+
+### No sound
+
+- Find the `audio ready` line in the log, or a warning explaining why not. Remember
+  that a missing file is only logged as information.
+- Test the device outside the launcher: `speaker-test -c 2 -t sine -l 1`.
+- Check `amixer` for a muted or low output. The launcher does not change system
+  volume.
+- `audio unavailable` or `cannot open sound device` means the device is missing or
+  busy. Check permissions, see [Access requirements](#access-requirements), and
+  find what is using it with `fuser -v /dev/snd/*`.
+- To select the driver, set `SDL_AUDIODRIVER`, for example to `alsa`.
+
+### Emulator has no sound
+
+On plain ALSA the emulator needs the device the launcher has just released. A log
+line `still open after SDL shutdown` naming `/dev/snd` would be a launcher bug.
+Otherwise check the emulator's own audio driver setting.
 
 ### Missing shared libraries
 
@@ -673,18 +827,31 @@ Statistics problems never stop a game, and show as log warnings.
 
 ## Verification status
 
-Tested on Debian 13 (x86-64, Rust 1.85), using both classic SDL 2.32 and Arch
-Linux's `sdl2-compat` 2.32.74 on Arch's SDL3 3.2.28: the full test suite, plus the
-real binary on a virtual X server covering repeated launch and return cycles in
-both modes, the supervisor, failed display restoration, and a virtual
-controller exercising hotplug, navigation, dead zones and unplugging.
+**Tested on Arch Linux** in a libvirt virtual machine: `virtio-gpu` KMS, an emulated
+HDA sound card on plain ALSA with no PipeWire, `sdl2-compat` 2.32.74 on SDL 3.4.18,
+and `sdl2_mixer` 2.8.2, run on a text console through the XRGB wrapper described in
+[Troubleshooting](#the-menu-runs-but-the-console-stays-on-screen). The binary was
+built on Debian 13 with Rust 1.85. Verified by reading DRM and ALSA state from the
+kernel, by screenshots of the virtual display, and by analysing the mixed audio
+written to a file:
 
-**Not yet tested: the `kmsdrm` backend on real hardware.** The test machine's
-display was in use, so only the failure path of KMSDRM has been exercised. DRM
-master handover to a real emulator is the design's central assumption and still
-needs the [manual test](#manual-test-on-real-hardware). The current Arch SDL3
-3.4 package could not be loaded on the test machine, which has an older glibc.
-No real emulator has been launched yet.
+- The menu, wallpaper, banner and fallbacks on real KMSDRM
+- Launching real RetroArch with the snes9x core in both modes, with the display and
+  sound device passing to RetroArch and back, and no devices left open
+- Mode B and restarting through `scripts/kiosk-loop.sh`
+- Selection sounds, launch sound, music fade and music restart in the mixed output
+- All listed audio formats, and every missing or invalid asset case
+- Navigation and hotplug through a virtual controller
+
+**Not yet tested:**
+
+- Physical GPUs. Only `virtio-gpu` has been used, and it needs the wrapper above.
+- Audio heard through real speakers. Output was verified up to the sound device.
+- Pressing buttons on a physical controller. A real one was detected, but
+  input came from a virtual device.
+- Exiting RetroArch with a controller combination or keyboard. The tests ended it
+  with `SIGTERM`.
+- MAME, DOSBox, and PipeWire or PulseAudio setups, launched through the menu.
 
 ## Limitations
 
@@ -700,6 +867,8 @@ Current behaviour worth knowing:
 - Text files marked executable but lacking a `#!` line fail to start in Mode A, but
   in Mode B are run by `/bin/sh`, which is how `execvp` behaves. Always use `#!`.
 - The launcher may briefly show the text console while switching to a game.
+- The screen does not update during the launch sound, for at most 2 seconds.
+- Music restarts from the beginning after a game. It does not resume.
 - Artwork is decoded on the main thread, limited to two images per frame. Covers
   appear progressively when scrolling fast through a large library.
 - `{game_dir}` expansion assumes the game directory path is valid UTF-8.
@@ -712,7 +881,7 @@ Deferred to future versions:
 - Search, favourites, and filtering by platform
 - Remembering the sort mode across restarts
 - Background artwork decoding, and animations
-- Audio, and configurable controls
+- Configurable controls
 - A systemd service
 
 ## License

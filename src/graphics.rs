@@ -26,15 +26,20 @@ use sdl2::surface::Surface;
 use sdl2::ttf::{Font, Sdl2TtfContext};
 use sdl2::video::WindowContext;
 
-use crate::config::Config;
+use crate::audio::Audio;
+use crate::config::{AppearanceConfig, Config};
 use crate::gamepad::{Action, Input};
 use crate::launcher::LaunchPlan;
-use crate::menu::{Area, Layout, MenuState, fit_inside};
+use crate::menu::{Area, Layout, MenuState, cover_crop, fit_inside};
 
 const WINDOWED_SIZE: (u32, u32) = (1280, 720);
 /// Longest side of a cover texture, keeping huge scans from filling VRAM.
 const MAX_COVER_SIDE: u32 = 1024;
 const MAX_ICON_SIDE: u32 = 128;
+const MAX_BACKGROUND_SIDE: u32 = 3840;
+const MAX_BANNER_SIDE: u32 = 1920;
+/// Darkness of the strips behind text when a wallpaper is showing.
+const TEXT_BACKDROP_ALPHA: u8 = 150;
 /// Decoding is synchronous, so a budget keeps scrolling responsive: covers
 /// appear over a few frames instead of stalling input.
 const COVER_LOADS_PER_FRAME: usize = 2;
@@ -103,8 +108,8 @@ pub fn run_session(
     let controllers = sdl
         .game_controller()
         .map_err(|e| format!("controller initialization failed: {e}"))?;
-    let _image = sdl2::image::init(InitFlag::PNG)
-        .inspect_err(|e| log_warn!("PNG support unavailable, using placeholders: {e}"))
+    let _image = sdl2::image::init(InitFlag::PNG | InitFlag::JPG)
+        .inspect_err(|e| log_warn!("some image formats are unavailable: {e}"))
         .ok();
     let ttf = sdl2::ttf::init()
         .inspect_err(|e| log_warn!("font support unavailable, text disabled: {e}"))
@@ -124,15 +129,14 @@ pub fn run_session(
         .event_pump()
         .map_err(|e| format!("event initialization failed: {e}"))?;
     let mut input = Input::new(controllers);
-    let mut renderer = Renderer::new(
-        canvas,
-        &creator,
-        ttf.as_ref(),
-        config.display.font.clone(),
-        config.games.platforms_directory.clone(),
-    );
+    let mut renderer = Renderer::new(canvas, &creator, ttf.as_ref(), config);
+    let audio = Audio::open(&sdl, &config.audio);
+    if let Some(audio) = &audio {
+        audio.start_music();
+    }
 
     let started = Instant::now();
+    let mut first_frame = true;
     let mut notice_deadline = None;
     let mut dirty = true;
     let mut events = Vec::new();
@@ -172,21 +176,28 @@ pub fn run_session(
         input.tick(now, &mut actions);
         dirty |= input.connected() != connected;
 
+        let mut selection_moved = false;
         for action in actions.drain(..) {
             dirty = true;
             match action {
-                Action::Navigate(nav) => {
-                    menu.navigate(nav);
-                }
+                Action::Navigate(nav) => selection_moved |= menu.navigate(nav),
                 Action::CycleSort => menu.cycle_sort(),
                 Action::Launch if started.elapsed() >= LAUNCH_GUARD => {
                     menu.clear_notice();
                     notice_deadline = None;
                     if let Some(plan) = on_select(menu) {
+                        if let Some(audio) = &audio {
+                            audio.finish_for_launch();
+                        }
                         break 'session SessionEnd::Launch(plan);
                     }
                 }
                 Action::Launch => {}
+            }
+        }
+        if selection_moved {
+            if let Some(audio) = &audio {
+                audio.play_select();
             }
         }
 
@@ -200,7 +211,20 @@ pub fn run_session(
         }
 
         if dirty {
+            if first_frame {
+                sdl2::clear_error();
+            }
             dirty = renderer.render(menu, input.connected());
+            if first_frame {
+                first_frame = false;
+                // Presenting cannot report failure, so a display that rejects
+                // our framebuffer otherwise just leaves the console on screen.
+                // SDL's error text also holds harmless messages, hence the match.
+                let error = sdl2::get_error();
+                if error.contains("videomode") {
+                    log_warn!("the display rejected the first frame: {error}");
+                }
+            }
         }
     };
 
@@ -324,7 +348,11 @@ struct Renderer<'c, 't> {
     font_path: PathBuf,
     fonts: Option<Fonts<'t>>,
     platforms_directory: PathBuf,
+    appearance: &'t AppearanceConfig,
     layout: Option<Layout>,
+    /// The outer `Option` means "not loaded yet", the inner one "no image".
+    background: Option<Option<Texture<'c>>>,
+    banner: Option<Option<Texture<'c>>>,
     covers: HashMap<String, CachedCover<'c>>,
     icons: HashMap<String, Option<Texture<'c>>>,
     text: HashMap<TextKey, Texture<'c>>,
@@ -336,18 +364,20 @@ impl<'c, 't> Renderer<'c, 't> {
         mut canvas: WindowCanvas,
         creator: &'c TextureCreator<WindowContext>,
         ttf: Option<&'t Sdl2TtfContext>,
-        font_path: PathBuf,
-        platforms_directory: PathBuf,
+        config: &'t Config,
     ) -> Self {
         canvas.set_blend_mode(BlendMode::Blend);
         Self {
             canvas,
             creator,
             ttf,
-            font_path,
+            font_path: config.display.font.clone(),
             fonts: None,
-            platforms_directory,
+            platforms_directory: config.games.platforms_directory.clone(),
+            appearance: &config.appearance,
             layout: None,
+            background: None,
+            banner: None,
             covers: HashMap::new(),
             icons: HashMap::new(),
             text: HashMap::new(),
@@ -356,6 +386,8 @@ impl<'c, 't> Renderer<'c, 't> {
     }
 
     fn forget_textures(&mut self) {
+        self.background = None;
+        self.banner = None;
         self.covers.clear();
         self.icons.clear();
         self.text.clear();
@@ -364,7 +396,12 @@ impl<'c, 't> Renderer<'c, 't> {
     /// Recomputes geometry when the output size changes.
     fn update_layout(&mut self, menu: &mut MenuState) -> Layout {
         let (width, height) = self.canvas.output_size().unwrap_or(WINDOWED_SIZE);
-        let current = Layout::compute(width, height);
+        if self.banner.is_none() {
+            let path = &self.appearance.banner;
+            self.banner = Some(self.load_image(path, MAX_BANNER_SIDE));
+        }
+        let has_banner = matches!(self.banner, Some(Some(_)));
+        let current = Layout::compute(width, height, has_banner);
         if self.layout != Some(current) {
             self.layout = Some(current);
             menu.set_viewport(current.columns, current.rows);
@@ -383,6 +420,7 @@ impl<'c, 't> Renderer<'c, 't> {
         let layout = self.update_layout(menu);
         self.canvas.set_draw_color(BACKGROUND);
         self.canvas.clear();
+        self.draw_background(layout);
 
         let loading = if menu.is_empty() {
             self.draw_empty_state(menu, layout);
@@ -396,6 +434,48 @@ impl<'c, 't> Renderer<'c, 't> {
         self.canvas.present();
         self.evict(menu);
         loading
+    }
+
+    fn has_wallpaper(&self) -> bool {
+        matches!(self.background, Some(Some(_)))
+    }
+
+    /// Draws the wallpaper, cropped to cover the screen, and the shading that
+    /// keeps the header and footer readable on top of it.
+    fn draw_background(&mut self, layout: Layout) {
+        if self.background.is_none() {
+            let path = &self.appearance.background;
+            self.background = Some(self.load_image(path, MAX_BACKGROUND_SIDE));
+        }
+        let Some(Some(texture)) = &self.background else {
+            return;
+        };
+        let query = texture.query();
+        let crop = cover_crop(query.width, query.height, layout.width, layout.height);
+        let _ = self.canvas.copy(texture, rect(crop), None);
+
+        let dim = self.appearance.background_dim * 255 / 100;
+        self.canvas.set_draw_color(Color::RGBA(0, 0, 0, dim as u8));
+        let _ = self.canvas.fill_rect(None);
+
+        self.draw_text_backdrop(Area {
+            x: 0,
+            y: 0,
+            width: layout.width,
+            height: layout.header_height,
+        });
+        self.draw_text_backdrop(Area {
+            x: 0,
+            y: (layout.height - layout.footer_height) as i32,
+            width: layout.width,
+            height: layout.footer_height,
+        });
+    }
+
+    fn draw_text_backdrop(&mut self, area: Area) {
+        self.canvas
+            .set_draw_color(Color::RGBA(0, 0, 0, TEXT_BACKDROP_ALPHA));
+        let _ = self.canvas.fill_rect(rect(area));
     }
 
     fn draw_grid(&mut self, menu: &MenuState, layout: Layout) -> bool {
@@ -425,6 +505,14 @@ impl<'c, 't> Renderer<'c, 't> {
             self.draw_cover(&game.id, &game.title, area);
             self.draw_platform_icon(&game.platform, area, layout);
 
+            if self.has_wallpaper() {
+                self.draw_text_backdrop(Area {
+                    x: area.x,
+                    y: area.y + area.height as i32,
+                    width: area.width,
+                    height: layout.title_height,
+                });
+            }
             let selected = position == menu.selected_position();
             let color = if selected { ACCENT } else { TEXT };
             let width = area.width.saturating_sub(4);
@@ -548,19 +636,52 @@ impl<'c, 't> Renderer<'c, 't> {
 
     fn draw_header(&mut self, menu: &MenuState, layout: Layout) {
         let y = (layout.height / 40) as i32;
-        // Cover labels are cut to fit, so the full title belongs up here.
-        let title = menu.selected_game().map_or("Games", |game| &game.title);
-        let width = layout.width * 2 / 3;
-        self.draw_text(title, FontSize::Heading, TEXT, layout.margin, y, width);
-        if !menu.is_empty() {
-            let summary = format!(
+        let summary = (!menu.is_empty()).then(|| {
+            format!(
                 "{}   |   {} of {}",
                 menu.sort().label(),
                 menu.selected_position() + 1,
                 menu.len()
-            );
-            self.draw_text_right(&summary, FontSize::Small, MUTED, layout, y + 8);
+            )
+        });
+        // Cover labels are cut to fit, so the full title belongs up here.
+        let selected = menu.selected_game().map(|game| game.title.as_str());
+
+        if let Some(banner_width) = self.draw_banner(layout) {
+            let right = layout.width - banner_width - 3 * layout.margin as u32;
+            if let Some(title) = selected {
+                self.draw_text_right(title, FontSize::Heading, TEXT, layout, y, right);
+            }
+            if let Some(summary) = summary {
+                let below = y + (layout.height / 14) as i32;
+                self.draw_text_right(&summary, FontSize::Small, MUTED, layout, below, right);
+            }
+        } else {
+            let title = selected.unwrap_or("Games");
+            let width = layout.width * 2 / 3;
+            self.draw_text(title, FontSize::Heading, TEXT, layout.margin, y, width);
+            if let Some(summary) = summary {
+                let width = layout.width / 4;
+                self.draw_text_right(&summary, FontSize::Small, MUTED, layout, y + 8, width);
+            }
         }
+    }
+
+    /// Draws the banner if there is one and returns its width.
+    fn draw_banner(&mut self, layout: Layout) -> Option<u32> {
+        let Some(Some(texture)) = &self.banner else {
+            return None;
+        };
+        let query = texture.query();
+        let area = layout.banner_area();
+        let fitted = fit_inside(query.width, query.height, area);
+        // Left-aligned: fit_inside centres, which would float it mid-header.
+        let target = Area {
+            x: area.x,
+            ..fitted
+        };
+        let _ = self.canvas.copy(texture, None, rect(target));
+        Some(target.width)
     }
 
     fn draw_footer(&mut self, menu: &MenuState, layout: Layout, controllers: usize) {
@@ -582,7 +703,8 @@ impl<'c, 't> Renderer<'c, 't> {
         );
         if let Some(game) = menu.selected_game() {
             let platform = game.platform.to_uppercase();
-            self.draw_text_right(&platform, FontSize::Small, MUTED, layout, y);
+            let width = layout.width / 4;
+            self.draw_text_right(&platform, FontSize::Small, MUTED, layout, y, width);
         }
     }
 
@@ -702,9 +824,10 @@ impl<'c, 't> Renderer<'c, 't> {
         color: Color,
         layout: Layout,
         y: i32,
+        max_width: u32,
     ) {
         let right = layout.width as i32 - layout.margin;
-        if let Some(key) = self.prepare_text(text, size, color, layout.width / 4) {
+        if let Some(key) = self.prepare_text(text, size, color, max_width) {
             self.blit_text(&key, |width, _| (right - width as i32, y));
         }
     }

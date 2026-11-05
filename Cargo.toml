@@ -10,7 +10,7 @@ readme = "README.md"
 [dependencies]
 # No "bundled" or "static-link": SDL2 is linked dynamically against the
 # distribution's libraries (sdl2-compat on Arch Linux).
-sdl2 = { version = "0.38", default-features = false, features = ["image", "ttf"] }
+sdl2 = { version = "0.38", default-features = false, features = ["image", "mixer", "ttf"] }
 # "bundled" compiles a pinned SQLite into the binary, so the kiosk has no
 # runtime dependency on the system libsqlite3. 0.41 needs Rust 1.89.
 rusqlite = { version = "0.40", features = ["bundled"] }

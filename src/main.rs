@@ -19,6 +19,7 @@ fn log_line(level: &str, message: std::fmt::Arguments) {
 macro_rules! log_info { ($($arg:tt)*) => { crate::log_line("info", format_args!($($arg)*)) } }
 macro_rules! log_warn { ($($arg:tt)*) => { crate::log_line("warning", format_args!($($arg)*)) } }
 
+mod audio;
 mod config;
 mod game;
 mod gamepad;
@@ -330,7 +331,11 @@ fn run(cli: Cli) -> Result<u8, Fatal> {
 }
 
 fn load_config(path: &Path) -> Result<Config, Fatal> {
-    Config::load(path).map_err(|e| Fatal::new(EXIT_USAGE, e))
+    let config = Config::load(path).map_err(|e| Fatal::new(EXIT_USAGE, e))?;
+    for warning in &config.warnings {
+        log_warn!("{warning}");
+    }
+    Ok(config)
 }
 
 fn main() -> ExitCode {

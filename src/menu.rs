@@ -300,11 +300,12 @@ pub struct Layout {
 }
 
 impl Layout {
-    pub fn compute(width: u32, height: u32) -> Self {
+    /// A banner needs a taller header, which the cover grid gives up.
+    pub fn compute(width: u32, height: u32, has_banner: bool) -> Self {
         let (width, height) = (width.max(160), height.max(120));
         let margin = (width / 40).max(8);
         let gap = (height / 40).max(6);
-        let header_height = height / 10;
+        let header_height = height / if has_banner { 6 } else { 10 };
         let footer_height = height / 12;
         let title_height = height / 18;
 
@@ -334,6 +335,18 @@ impl Layout {
         }
     }
 
+    /// Where the banner may be drawn: the left of the header, leaving room
+    /// on the right for the selected title.
+    pub fn banner_area(&self) -> Area {
+        let padding = self.header_height / 8;
+        Area {
+            x: self.margin,
+            y: padding as i32,
+            width: self.width * 2 / 5,
+            height: self.header_height - 2 * padding,
+        }
+    }
+
     /// The cover area of a slot, counted from the top-left visible cell.
     pub fn cover_area(&self, slot: usize) -> Area {
         let column = (slot % self.columns) as i32;
@@ -359,6 +372,29 @@ pub fn fit_inside(image_width: u32, image_height: u32, area: Area) -> Area {
     Area {
         x: area.x + (area_width - width) as i32 / 2,
         y: area.y + (area_height - height) as i32 / 2,
+        width: width as u32,
+        height: height as u32,
+    }
+}
+
+/// The part of an image to show so that it covers a screen without
+/// distortion: the largest centred region with the screen's aspect ratio.
+pub fn cover_crop(
+    image_width: u32,
+    image_height: u32,
+    screen_width: u32,
+    screen_height: u32,
+) -> Area {
+    let (image_width, image_height) = (image_width.max(1) as u64, image_height.max(1) as u64);
+    let (screen_width, screen_height) = (screen_width.max(1) as u64, screen_height.max(1) as u64);
+    let (width, height) = if image_width * screen_height > image_height * screen_width {
+        (image_height * screen_width / screen_height, image_height)
+    } else {
+        (image_width, image_width * screen_height / screen_width)
+    };
+    Area {
+        x: ((image_width - width) / 2) as i32,
+        y: ((image_height - height) / 2) as i32,
         width: width as u32,
         height: height as u32,
     }
@@ -586,23 +622,80 @@ mod tests {
             (3840, 2160),
             (1080, 1920),
         ] {
-            let layout = Layout::compute(width, height);
-            let last = layout.cover_area(layout.columns * layout.rows - 1);
-            let right = last.x + last.width as i32;
-            let bottom = last.y + (last.height + layout.title_height) as i32;
-            assert!(layout.columns >= 1 && layout.rows >= 1);
-            assert!(right <= width as i32, "{width}x{height}: right {right}");
-            assert!(
-                bottom <= (height - layout.footer_height) as i32,
-                "{width}x{height}: bottom {bottom}"
-            );
+            for has_banner in [false, true] {
+                let layout = Layout::compute(width, height, has_banner);
+                let last = layout.cover_area(layout.columns * layout.rows - 1);
+                let right = last.x + last.width as i32;
+                let bottom = last.y + (last.height + layout.title_height) as i32;
+                assert!(layout.columns >= 1 && layout.rows >= 1);
+                assert!(right <= width as i32, "{width}x{height}: right {right}");
+                assert!(
+                    bottom <= (height - layout.footer_height) as i32,
+                    "{width}x{height}: bottom {bottom}"
+                );
+            }
         }
     }
 
     #[test]
     fn degenerate_output_size_does_not_panic() {
-        let layout = Layout::compute(0, 0);
+        let layout = Layout::compute(0, 0, true);
         assert!(layout.columns >= 1 && layout.cover_width >= 1);
+    }
+
+    #[test]
+    fn banner_stays_inside_the_header_and_clear_of_the_covers() {
+        for (width, height) in [(320, 240), (1280, 800), (3840, 2160)] {
+            let layout = Layout::compute(width, height, true);
+            let banner = layout.banner_area();
+            assert!(banner.y + banner.height as i32 <= layout.grid_y);
+            assert!(banner.x + (banner.width as i32) < width as i32);
+        }
+    }
+
+    #[test]
+    fn navigation_reports_only_real_selection_changes() {
+        let mut menu = numbered_menu(3, 3, 1);
+        assert!(!menu.navigate(Nav::Left), "already first");
+        assert!(!menu.navigate(Nav::Up), "already on the top row");
+        assert!(!menu.navigate(Nav::PageUp), "already first");
+        assert!(menu.navigate(Nav::PageDown));
+        assert!(!menu.navigate(Nav::PageDown), "already last");
+        assert!(!menu.navigate(Nav::Right), "already last");
+        assert!(!menu.navigate(Nav::Down), "already on the last row");
+        assert!(menu.navigate(Nav::Left));
+    }
+
+    #[test]
+    fn cover_crop_trims_the_long_side_and_stays_centred() {
+        // Wider than the screen: the sides are lost.
+        let crop = cover_crop(2000, 1000, 1000, 1000);
+        assert_eq!(
+            (crop.x, crop.y, crop.width, crop.height),
+            (500, 0, 1000, 1000)
+        );
+        // Taller than the screen: the top and bottom are lost.
+        let crop = cover_crop(1000, 2000, 1000, 500);
+        assert_eq!(
+            (crop.x, crop.y, crop.width, crop.height),
+            (0, 750, 1000, 500)
+        );
+    }
+
+    #[test]
+    fn cover_crop_uses_all_of_a_matching_image() {
+        let crop = cover_crop(1920, 1080, 1280, 720);
+        assert_eq!(
+            (crop.x, crop.y, crop.width, crop.height),
+            (0, 0, 1920, 1080)
+        );
+    }
+
+    #[test]
+    fn cover_crop_handles_small_and_degenerate_sizes() {
+        let crop = cover_crop(16, 9, 3840, 2160);
+        assert_eq!((crop.width, crop.height), (16, 9));
+        assert!(cover_crop(0, 0, 0, 0).width >= 1);
     }
 
     #[test]

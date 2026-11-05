@@ -102,12 +102,15 @@ pub fn exit_code(status: ExitStatus) -> u8 {
     }
 }
 
-fn is_display_or_input_device(target: &str) -> bool {
-    target.starts_with("/dev/dri/") || target.starts_with("/dev/input/")
+fn is_exclusive_device(target: &str) -> bool {
+    ["/dev/dri/", "/dev/input/", "/dev/snd/"]
+        .iter()
+        .any(|prefix| target.starts_with(prefix))
 }
 
-/// Lists display and input devices this process still has open. A DRM file
-/// descriptor left open here would keep DRM master away from the game.
+/// Lists devices this process still has open that a game will need. A DRM
+/// file descriptor left open would keep DRM master away from the game, and
+/// on plain ALSA an open sound device would leave it silent.
 pub fn held_devices() -> Vec<String> {
     let Ok(entries) = fs::read_dir("/proc/self/fd") else {
         return Vec::new();
@@ -116,7 +119,7 @@ pub fn held_devices() -> Vec<String> {
         .flatten()
         .filter_map(|entry| fs::read_link(entry.path()).ok())
         .map(|target| target.to_string_lossy().into_owned())
-        .filter(|target| is_display_or_input_device(target))
+        .filter(|target| is_exclusive_device(target))
         .collect()
 }
 
@@ -270,10 +273,11 @@ mod tests {
     }
 
     #[test]
-    fn recognises_display_and_input_devices() {
-        assert!(is_display_or_input_device("/dev/dri/card0"));
-        assert!(is_display_or_input_device("/dev/input/event3"));
-        assert!(!is_display_or_input_device("/dev/null"));
-        assert!(!is_display_or_input_device("/dev/tty1"));
+    fn recognises_devices_a_game_needs() {
+        assert!(is_exclusive_device("/dev/dri/card0"));
+        assert!(is_exclusive_device("/dev/input/event3"));
+        assert!(is_exclusive_device("/dev/snd/pcmC0D0p"));
+        assert!(!is_exclusive_device("/dev/null"));
+        assert!(!is_exclusive_device("/dev/tty1"));
     }
 }

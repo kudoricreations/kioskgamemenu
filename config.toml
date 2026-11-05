@@ -24,3 +24,21 @@ platforms_directory = "platforms"
 [menu]
 # name_asc, name_desc, most_played or recently_played
 sort = "name_asc"
+
+# Everything below is optional. A missing file just means that sound or image
+# is left out, so these can be replaced at any time without recompiling.
+
+[audio]
+enabled = true
+music = "assets/music.opus"
+select_sound = "assets/select.opus"
+launch_sound = "assets/launch.opus"
+# 0 to 100
+music_volume = 50
+effects_volume = 75
+
+[appearance]
+background = "assets/background.jpg"
+banner = "assets/banner.png"
+# How much to darken the wallpaper so that text stays readable, 0 to 100.
+background_dim = 40
