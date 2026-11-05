@@ -24,6 +24,7 @@ mod config;
 mod game;
 mod gamepad;
 mod graphics;
+mod kms_format;
 mod launcher;
 mod menu;
 mod statistics;
@@ -39,6 +40,9 @@ const EXIT_FAILURE: u8 = 1;
 const EXIT_USAGE: u8 = 2;
 const EXIT_DISPLAY_INIT: u8 = 3;
 const EXIT_DISPLAY_RESTORE: u8 = 4;
+/// ESC outside kiosk mode. Tells scripts/kiosk-loop.sh to stop, so keep the two
+/// in step. Unusual on purpose: in replace mode the loop sees game statuses too.
+const EXIT_USER_QUIT: u8 = 120;
 /// Same meanings as in a POSIX shell.
 const EXIT_CANNOT_EXECUTE: u8 = 126;
 const EXIT_NOT_FOUND: u8 = 127;
@@ -221,6 +225,12 @@ fn run_menu(config: &Config, discovery: Discovery, store: &StatsStore) -> Result
     loop {
         let plan = match end {
             SessionEnd::Quit => return Ok(0),
+            SessionEnd::Escape if !config.launcher.kiosk_mode => return Ok(EXIT_USER_QUIT),
+            SessionEnd::Escape => {
+                log_info!("ESC pressed in kiosk mode, restarting the menu");
+                end = restore_session(config, &mut menu, &mut on_select)?;
+                continue;
+            }
             SessionEnd::Launch(plan) => plan,
         };
         // run_session has returned, so SDL has released the display.

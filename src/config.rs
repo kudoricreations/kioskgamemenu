@@ -33,12 +33,16 @@ pub struct LauncherConfig {
     /// `false`: replace this process with the game (`exec`).
     #[serde(rename = "keepLauncherRunning")]
     pub keep_launcher_running: bool,
+    /// true: ESC only restarts the menu. false: ESC ends the menu and the loop.
+    #[serde(rename = "kioskMode")]
+    pub kiosk_mode: bool,
 }
 
 impl Default for LauncherConfig {
     fn default() -> Self {
         Self {
             keep_launcher_running: true,
+            kiosk_mode: true,
         }
     }
 }

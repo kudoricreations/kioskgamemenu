@@ -6,6 +6,9 @@
 # false: replace this process with the game; scripts/kiosk-loop.sh restarts
 #        the menu when the game exits.
 keepLauncherRunning = true
+# false: ESC ends the menu and stops scripts/kiosk-loop.sh.
+# true:  ESC only restarts the menu; stop it with "kiosk-loop.sh stop" or pkill.
+kioskMode = false
 
 [display]
 # SDL video driver. "kmsdrm" drives the display directly from a Linux TTY.

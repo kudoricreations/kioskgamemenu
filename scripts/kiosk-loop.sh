@@ -8,7 +8,9 @@
 # launcher becomes the game through exec, so each game exit lands here and
 # brings the menu back. With keepLauncherRunning = true this loop only runs
 # again after a fatal launcher error. Pressing Ctrl+C on the terminal also
-# stops the loop.
+# stops the loop, and so does ESC when config.toml has kioskMode = false: the
+# launcher then exits with status 120. With kioskMode = true ESC only restarts
+# the menu.
 #
 # Optional environment:
 #   KIOSK_APP_DIR        application directory (default: parent of scripts/)
@@ -38,6 +40,8 @@ QUICK_FAILURE_SECONDS=5
 MAX_BACKOFF_SECONDS=30
 MAX_LOG_BYTES=5000000
 STOP_TIMEOUT_SECONDS=15
+# Must match EXIT_USER_QUIT in src/main.rs.
+EXIT_USER_QUIT=120
 
 find_binary() {
     if [ -n "${KIOSK_BIN:-}" ]; then
@@ -134,6 +138,7 @@ run_loop() {
         elapsed=$(($(date +%s) - started))
 
         [ -e "$STOP_FILE" ] && break
+        [ "$status" -eq "$EXIT_USER_QUIT" ] && break
         echo "$(date '+%F %T') launcher exited with status $status after ${elapsed}s" >>"$LOG_FILE"
 
         # Back off only when failing fast, so a broken setup does not spin.

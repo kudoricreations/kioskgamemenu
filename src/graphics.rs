@@ -76,6 +76,7 @@ const PLACEHOLDERS: [Color; 6] = [
 
 pub enum SessionEnd {
     Quit,
+    Escape,
     Launch(LaunchPlan),
 }
 
@@ -193,6 +194,7 @@ pub fn run_session(
                     }
                 }
                 Action::Launch => {}
+                Action::Escape => break 'session SessionEnd::Escape,
             }
         }
         if selection_moved {

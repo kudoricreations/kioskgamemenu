@@ -31,6 +31,7 @@ pub enum Action {
     Navigate(Nav),
     Launch,
     CycleSort,
+    Escape,
 }
 
 /// Input sources in priority order: a digital press overrides the stick.
@@ -233,6 +234,10 @@ impl Input {
                 } => match key {
                     Keycode::Return | Keycode::KpEnter => {
                         actions.push(Action::Launch);
+                        None
+                    }
+                    Keycode::Escape => {
+                        actions.push(Action::Escape);
                         None
                     }
                     Keycode::Tab => {
