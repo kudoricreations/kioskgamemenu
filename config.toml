@@ -1,0 +1,26 @@
+# KioskGameMenu configuration. Relative paths are resolved against the
+# directory containing this file. See README.md for every option.
+
+[launcher]
+# true:  run the game as a child process and return to the menu when it exits.
+# false: replace this process with the game; scripts/kiosk-loop.sh restarts
+#        the menu when the game exits.
+keepLauncherRunning = true
+
+[display]
+# SDL video driver. "kmsdrm" drives the display directly from a Linux TTY.
+# "auto" lets SDL choose. The SDL_VIDEODRIVER environment variable overrides this.
+backend = "kmsdrm"
+fullscreen = true
+# font = "assets/fonts/Lato-Regular.ttf"
+
+[storage]
+database = "data/stats.sqlite"
+
+[games]
+directory = "games"
+platforms_directory = "platforms"
+
+[menu]
+# name_asc, name_desc, most_played or recently_played
+sort = "name_asc"

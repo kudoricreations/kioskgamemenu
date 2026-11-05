@@ -1,0 +1,14 @@
+# Example definition. The paths below depend on your system: adjust them.
+id = "tekken-2"
+title = "Tekken 2"
+platform = "ps1"
+cover = "cover.png"
+
+executable = "/usr/bin/retroarch"
+
+args = [
+    "-f",
+    "-L",
+    "/usr/lib/libretro/mednafen_psx_libretro.so",
+    "/games/ps1/Tekken 2.cue"
+]

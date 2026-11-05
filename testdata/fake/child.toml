@@ -1,0 +1,14 @@
+# Fake-game configuration. Statistics stay out of the real database.
+[launcher]
+keepLauncherRunning = true
+
+[display]
+backend = "kmsdrm"
+font = "../../assets/fonts/Lato-Regular.ttf"
+
+[storage]
+database = "../../data/fake-stats.sqlite"
+
+[games]
+directory = "games"
+platforms_directory = "../../platforms"

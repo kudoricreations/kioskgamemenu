@@ -1,0 +1,14 @@
+# Example definition. The paths below depend on your system: adjust them.
+id = "super-mario-world"
+title = "Super Mario World"
+platform = "snes"
+cover = "cover.png"
+
+executable = "/usr/bin/retroarch"
+
+args = [
+    "-f",
+    "-L",
+    "/usr/lib/libretro/snes9x_libretro.so",
+    "/games/snes/Super Mario World.sfc"
+]

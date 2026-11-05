@@ -1,0 +1,4 @@
+id = "exit-status-1"
+title = "Crashes With Status 1"
+platform = "test"
+executable = "/usr/bin/false"

@@ -1,0 +1,4 @@
+id = "missing-emulator"
+title = "Missing Emulator"
+platform = "test"
+executable = "/no/such/emulator"

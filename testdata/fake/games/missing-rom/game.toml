@@ -1,0 +1,5 @@
+id = "missing-rom"
+title = "Missing ROM"
+platform = "test"
+executable = "/usr/bin/sleep"
+args = ["/no/such/rom.bin"]

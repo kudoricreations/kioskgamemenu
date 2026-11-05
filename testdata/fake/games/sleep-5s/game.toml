@@ -1,0 +1,5 @@
+id = "sleep-5s"
+title = "Sleep Five Seconds"
+platform = "test"
+executable = "/usr/bin/sleep"
+args = ["5"]

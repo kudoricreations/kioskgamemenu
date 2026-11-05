@@ -1,0 +1,25 @@
+[package]
+name = "kioskgamemenu"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Fullscreen, gamepad-controlled game launcher for Linux kiosks using SDL2 on DRM/KMS"
+license = "GPL-3.0-only"
+readme = "README.md"
+
+[dependencies]
+# No "bundled" or "static-link": SDL2 is linked dynamically against the
+# distribution's libraries (sdl2-compat on Arch Linux).
+sdl2 = { version = "0.38", default-features = false, features = ["image", "ttf"] }
+# "bundled" compiles a pinned SQLite into the binary, so the kiosk has no
+# runtime dependency on the system libsqlite3. 0.41 needs Rust 1.89.
+rusqlite = { version = "0.40", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+strip = "debuginfo"
